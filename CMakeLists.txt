@@ -51,6 +51,10 @@ target_compile_options(u8g2lib PRIVATE -w -ffunction-sections -fdata-sections)
 add_library(ws2812_pio INTERFACE)
 pico_generate_pio_header(ws2812_pio ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 
+# ---- Quadrature encoder PIO ---------------------------------------------------
+add_library(quadrature_encoder_pio INTERFACE)
+pico_generate_pio_header(quadrature_encoder_pio ${CMAKE_CURRENT_LIST_DIR}/quadrature_encoder.pio)
+
 # ---- Main executable ----------------------------------------------------------
 add_executable(encoder-sniffer main.c)
 
@@ -69,6 +73,7 @@ target_link_libraries(encoder-sniffer
     hardware_clocks
     u8g2lib
     ws2812_pio
+    quadrature_encoder_pio
 )
 
 pico_enable_stdio_uart(encoder-sniffer 0)

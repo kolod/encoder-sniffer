@@ -24,65 +24,63 @@
 #include "hardware/pio.h"
 #include "u8g2.h"
 #include "ws2812.pio.h"
+#include "quadrature_encoder.pio.h"
 #include "board.h"
 
 // ---- Quadrature decoder -----------------------------------------------
 //
-// State encoding: bit1 = A, bit0 = B  →  state ∈ {0,1,2,3}
-// Table index = (prev << 2) | curr
-//   +1 : CW step
-//   -1 : CCW step
-//    0 : no change (same state)
-//    2 : illegal 2-step jump → missed pulse
-
-static const int8_t QE_TABLE[16] = {
-     0,  1, -1,  2,   // prev=00
-    -1,  0,  2,  1,   // prev=01
-     1,  2,  0, -1,   // prev=10
-     2, -1,  1,  0,   // prev=11
-};
+// A/B phases are decoded entirely by two PIO state machines (pio1, sm0/sm1).
+// Each SM pushes +1 or -1 (as uint32_t) to its RX FIFO on every valid step.
+// The main loop drains the FIFO and accumulates enc->position / ->transitions.
+//
+// The Z (index) pulse still uses a GPIO interrupt to snapshot the position
+// and compute PPR between successive Z pulses.
 
 typedef struct {
-    uint8_t          pin_a;
-    uint8_t          pin_b;
-    uint8_t          pin_idx;
-    volatile int32_t position;
-    volatile int32_t rev_start_pos;   // position at last Z pulse
-    volatile int32_t ppr;             // pulses per revolution (0 = unknown)
-    volatile uint32_t missed_pulses;
-    volatile uint32_t missed_index;   // Z pulses missed (updated from main loop)
+    volatile int32_t  position;
+    volatile int32_t  rev_start_pos;  // position at last Z pulse
+    volatile int32_t  ppr;            // pulses per revolution (0 = unknown)
+    volatile uint32_t missed_index;   // Z pulses missed (detected from main loop)
     volatile uint32_t index_count;
-    volatile uint32_t transitions;    // total AB transitions (used to detect N/C)
-    bool             index_seen;
-    uint8_t          prev_state;
+    volatile uint32_t transitions;    // total AB steps (used to detect N/C input)
+    bool              index_seen;
 } encoder_t;
 
 static encoder_t enc_norm;
 static encoder_t enc_inv;
 
-static void encoder_init(encoder_t *enc, uint pin_a, uint pin_b, uint pin_idx) {
-    memset(enc, 0, sizeof(*enc));
-    enc->pin_a   = (uint8_t)pin_a;
-    enc->pin_b   = (uint8_t)pin_b;
-    enc->pin_idx = (uint8_t)pin_idx;
+// ---- PIO state machines ---------------------------------------------------
+// ws2812 uses pio0; both encoder SMs share the single program loaded in pio1.
 
-    for (uint p = pin_a; p <= pin_idx; p++) {
-        gpio_init(p);
-        gpio_set_dir(p, GPIO_IN);
-        gpio_pull_up(p);
-    }
-    enc->prev_state = (uint8_t)(gpio_get(pin_a) << 1) | (uint8_t)gpio_get(pin_b);
+static PIO  enc_pio;
+static uint enc_program_offset;
+static uint enc_norm_sm;
+static uint enc_inv_sm;
+
+static void encoders_pio_init(void) {
+    enc_pio            = pio1;
+    enc_program_offset = pio_add_program(enc_pio, &quadrature_encoder_program);
+
+    enc_norm_sm = pio_claim_unused_sm(enc_pio, true);
+    quadrature_encoder_program_init(enc_pio, enc_norm_sm, enc_program_offset,
+                                    ENCODER_NORMAL_PHASE_A_PIN);
+
+    enc_inv_sm = pio_claim_unused_sm(enc_pio, true);
+    quadrature_encoder_program_init(enc_pio, enc_inv_sm, enc_program_offset,
+                                    ENCODER_INVERTED_PHASE_A_PIN);
 }
 
-// Called from GPIO ISR when A or B changes.
-static inline void encoder_step(encoder_t *enc) {
-    uint8_t curr  = (uint8_t)(gpio_get(enc->pin_a) << 1) | (uint8_t)gpio_get(enc->pin_b);
-    int8_t  delta = QE_TABLE[(enc->prev_state << 2) | curr];
-    enc->prev_state = curr;
+static void encoder_init(encoder_t *enc, uint pin_idx) {
+    memset(enc, 0, sizeof(*enc));
+    gpio_init(pin_idx);
+    gpio_set_dir(pin_idx, GPIO_IN);
+    gpio_pull_up(pin_idx);
+}
 
-    if (delta == 2) {
-        enc->missed_pulses++;
-    } else if (delta != 0) {
+// Drain the PIO RX FIFO and accumulate position.  Called every main-loop tick.
+static void encoder_poll_pio(encoder_t *enc, uint sm) {
+    while (!pio_sm_is_rx_fifo_empty(enc_pio, sm)) {
+        int32_t delta = (int32_t)pio_sm_get(enc_pio, sm);
         enc->position += delta;
         enc->transitions++;
     }
@@ -98,14 +96,10 @@ static inline void encoder_z_pulse(encoder_t *enc) {
     enc->index_seen = true;
 }
 
-// Shared GPIO interrupt handler.
+// Shared GPIO interrupt handler — Z pins only; A/B are handled by PIO.
 static void gpio_irq_handler(uint gpio, uint32_t events) {
-    if (gpio == ENCODER_NORMAL_PHASE_A_PIN || gpio == ENCODER_NORMAL_PHASE_B_PIN) {
-        encoder_step(&enc_norm);
-    } else if (gpio == ENCODER_NORMAL_INDEX_PIN) {
+    if (gpio == ENCODER_NORMAL_INDEX_PIN) {
         encoder_z_pulse(&enc_norm);
-    } else if (gpio == ENCODER_INVERTED_PHASE_A_PIN || gpio == ENCODER_INVERTED_PHASE_B_PIN) {
-        encoder_step(&enc_inv);
     } else if (gpio == ENCODER_INVERTED_INDEX_PIN) {
         encoder_z_pulse(&enc_inv);
     }
@@ -210,7 +204,6 @@ static void display_update(void) {
     int32_t  pos      = enc_norm.position;
     int32_t  inv_pos  = enc_inv.position;
     int32_t  ppr      = enc_norm.ppr;
-    uint32_t miss     = enc_norm.missed_pulses;
     uint32_t z_cnt    = enc_norm.index_count;
     uint32_t miss_z   = enc_norm.missed_index;
     bool     norm_ok  = enc_norm.index_seen;
@@ -238,17 +231,14 @@ static void display_update(void) {
         snprintf(line, sizeof(line), "PPR:??? Z:%-4lu", (unsigned long)z_cnt);
     u8g2_DrawStr(&u8g2, 0, 35, line);
 
-    // Row 4: missed pulses / missed Z
-    snprintf(line, sizeof(line), "MISS:%-4lu MZ:%-4lu",
-             (unsigned long)miss, (unsigned long)miss_z);
+    // Row 4: missed Z pulses
+    snprintf(line, sizeof(line), "MZ:%-4lu", (unsigned long)miss_z);
     u8g2_DrawStr(&u8g2, 0, 47, line);
 
     // Row 5: status
     const char *status;
     if (miss_z > 0)
         status = "ERR: MISSED Z PULSE";
-    else if (miss > 0)
-        status = "ERR: MISSED PULSES";
     else if (!norm_ok)
         status = "Waiting for Z...";
     else
@@ -265,29 +255,15 @@ int main(void) {
 
     ws2812_init();
     display_init();
+    encoders_pio_init();
 
-    encoder_init(&enc_norm,
-                 ENCODER_NORMAL_PHASE_A_PIN,
-                 ENCODER_NORMAL_PHASE_B_PIN,
-                 ENCODER_NORMAL_INDEX_PIN);
-    encoder_init(&enc_inv,
-                 ENCODER_INVERTED_PHASE_A_PIN,
-                 ENCODER_INVERTED_PHASE_B_PIN,
-                 ENCODER_INVERTED_INDEX_PIN);
+    encoder_init(&enc_norm, ENCODER_NORMAL_INDEX_PIN);
+    encoder_init(&enc_inv,  ENCODER_INVERTED_INDEX_PIN);
 
-    // First call sets the shared ISR; subsequent calls add more pins.
+    // Only the Z (index) pins need GPIO interrupts; A/B are handled by PIO.
     gpio_set_irq_enabled_with_callback(
-        ENCODER_NORMAL_PHASE_A_PIN,
-        GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true, gpio_irq_handler);
-
-    gpio_set_irq_enabled(ENCODER_NORMAL_PHASE_B_PIN,
-                         GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
-    gpio_set_irq_enabled(ENCODER_NORMAL_INDEX_PIN,
-                         GPIO_IRQ_EDGE_RISE, true);
-    gpio_set_irq_enabled(ENCODER_INVERTED_PHASE_A_PIN,
-                         GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
-    gpio_set_irq_enabled(ENCODER_INVERTED_PHASE_B_PIN,
-                         GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL, true);
+        ENCODER_NORMAL_INDEX_PIN,
+        GPIO_IRQ_EDGE_RISE, true, gpio_irq_handler);
     gpio_set_irq_enabled(ENCODER_INVERTED_INDEX_PIN,
                          GPIO_IRQ_EDGE_RISE, true);
 
@@ -295,6 +271,9 @@ int main(void) {
 
     while (true) {
         uint32_t now = to_ms_since_boot(get_absolute_time());
+
+        encoder_poll_pio(&enc_norm, enc_norm_sm);
+        encoder_poll_pio(&enc_inv,  enc_inv_sm);
 
         check_missed_z(&enc_norm);
         check_missed_z(&enc_inv);
@@ -304,7 +283,7 @@ int main(void) {
             display_update();
 
             // WS2812 status:  red=error, blue=waiting, green=OK
-            if (enc_norm.missed_pulses > 0 || enc_norm.missed_index > 0)
+            if (enc_norm.missed_index > 0)
                 ws2812_set_rgb(8, 0, 0);
             else if (!enc_norm.index_seen)
                 ws2812_set_rgb(0, 0, 8);
