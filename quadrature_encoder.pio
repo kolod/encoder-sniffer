@@ -1,0 +1,123 @@
+; Encoder sniffer for Raspberry Pi Pico
+; Copyright (C) 2026-...  Oleksandr Kolodkin <oleksandr.kolodkin@ukr.net>
+;
+; This program is free software: you can redistribute it and/or modify
+; it under the terms of the GNU General Public License as published by
+; the Free Software Foundation, either version 3 of the License, or
+; (at your option) any later version.
+;
+; This program is distributed in the hope that it will be useful,
+; but WITHOUT ANY WARRANTY; without even the implied warranty of
+; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+; GNU General Public License for more details.
+;
+; You should have received a copy of the GNU General Public License
+; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+; Quadrature encoder decoder.
+;
+; Decodes AB phase signals entirely in hardware with no CPU involvement.
+; Pushes +1 (uint32 0x00000001) or -1 (uint32 0xFFFFFFFF) to the RX FIFO
+; on each valid step.  The CPU drains the FIFO and accumulates position.
+;
+; The 16-entry jump table at origin 0 is indexed by (prev_AB << 2) | curr_AB
+; where AB = {A=bit1, B=bit0}.  Illegal 2-step transitions are silently
+; ignored (no push); missed pulses are therefore not counted here.
+;
+; pin_base must point at Phase A; Phase B = pin_base + 1 (consecutive GPIOs).
+; Set ISR shift direction LEFT, no autopush.  Clock divider = 1 (125 MHz).
+
+.program quadrature_encoder
+.origin 0
+
+; ---- 16-entry jump table (addresses 0–15) --------------------------------
+; index = (prev << 2) | curr,  AB state: bit1=A, bit0=B
+    jmp update      ;  0  00→00  no change
+    jmp increment   ;  1  00→01  +1
+    jmp decrement   ;  2  00→10  −1
+    jmp update      ;  3  00→11  illegal
+    jmp decrement   ;  4  01→00  −1
+    jmp update      ;  5  01→01  no change
+    jmp update      ;  6  01→10  illegal
+    jmp increment   ;  7  01→11  +1
+    jmp increment   ;  8  10→00  +1
+    jmp update      ;  9  10→01  illegal
+    jmp update      ; 10  10→10  no change
+    jmp decrement   ; 11  10→11  −1
+    jmp update      ; 12  11→00  illegal
+    jmp decrement   ; 13  11→01  −1
+    jmp increment   ; 14  11→10  +1
+    jmp update      ; 15  11→11  no change
+
+; ---- program body (addresses 16–28) --------------------------------------
+;
+; X holds the previous (prev<<2)|curr index from the last iteration so that
+; X[1:0] is the previous AB state.  On entry to update X is set this way
+; by the init helper using pio_sm_exec.
+;
+; Sequence each pass:
+;   ISR ← 0
+;   ISR ← (X[1:0] << 2) | pins[1:0]   →  table index
+;   Y   ← index  (for jmp y dispatch)
+;   X   ← index  (X[1:0] = curr, becomes prev next iteration)
+;   jmp y  →  one of the 16 table entries above
+
+update:
+    mov isr, null       ; ISR = 0
+    in x, 2             ; ISR = X[1:0] = previous AB state
+    in pins, 2          ; ISR = (prev<<2) | curr  =  table index
+    mov y, isr          ; Y = index → used by jmp y
+    mov x, isr          ; X[1:0] = curr → becomes prev next iteration
+    mov exec, y         ; execute Y as instruction: Y = 0–15 encodes jmp Y
+                        ; lands in the table above, which then jmp to the handler
+
+increment:
+    set y, 1
+    mov isr, y          ; ISR = 0x00000001
+    push noblock        ; RX FIFO ← +1  (drop if full)
+    jmp update
+
+decrement:
+    mov isr, !null      ; ISR = 0xFFFFFFFF  (= -1 as int32_t)
+    push noblock        ; RX FIFO ← -1  (drop if full)
+    jmp update
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/pio.h"
+
+// Initialise one state machine for a quadrature encoder.
+// pin_a and pin_a+1 must be the A and B encoder inputs (consecutive GPIOs).
+// Pull-ups and GPIO function are configured here; call gpio_pull_up
+// for the Z (index) pin separately.
+static inline void quadrature_encoder_program_init(PIO pio, uint sm, uint offset, uint pin_a) {
+    pio_sm_config c = quadrature_encoder_program_get_default_config(offset);
+
+    // Two consecutive input pins; left-shift; no autopush.
+    sm_config_set_in_pins(&c, pin_a);
+    sm_config_set_in_shift(&c, false, false, 32);
+
+    // Join TX into RX to double the FIFO depth (8 entries).
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+    // Full speed – 125 MHz gives ~9 ns per instruction,
+    // plenty of margin for any mechanical or industrial encoder.
+    sm_config_set_clkdiv_int_frac(&c, 1, 0);
+
+    pio_gpio_init(pio, pin_a);
+    pio_gpio_init(pio, pin_a + 1);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_a, 2, false);  // inputs
+    gpio_pull_up(pin_a);
+    gpio_pull_up(pin_a + 1);
+
+    pio_sm_init(pio, sm, offset, &c);
+
+    // Pre-load X with the current pin state so the very first step is decoded
+    // correctly (no spurious transition from the default state 0).
+    pio_sm_set_enabled(pio, sm, false);
+    pio_sm_exec(pio, sm, pio_encode_mov(pio_isr, pio_null));
+    pio_sm_exec(pio, sm, pio_encode_in(pio_pins, 2));
+    pio_sm_exec(pio, sm, pio_encode_mov(pio_x, pio_isr));
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
