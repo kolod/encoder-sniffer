@@ -90,9 +90,7 @@ decrement:
 // pin_a and pin_a+1 must be the A and B encoder inputs (consecutive GPIOs).
 // Pull-ups and GPIO function are configured here; call gpio_pull_up
 // for the Z (index) pin separately.
-static inline void quadrature_encoder_program_init(PIO pio, uint sm,
-                                                    uint offset, uint pin_a)
-{
+static inline void quadrature_encoder_program_init(PIO pio, uint sm, uint offset, uint pin_a) {
     pio_sm_config c = quadrature_encoder_program_get_default_config(offset);
 
     // Two consecutive input pins; left-shift; no autopush.
