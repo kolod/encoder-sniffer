@@ -68,7 +68,8 @@ update:
     in pins, 2          ; ISR = (prev<<2) | curr  =  table index
     mov y, isr          ; Y = index → used by jmp y
     mov x, isr          ; X[1:0] = curr → becomes prev next iteration
-    jmp y               ; dispatch into the 16-entry table above
+    mov exec, y         ; execute Y as instruction: Y = 0–15 encodes jmp Y
+                        ; lands in the table above, which then jmp to the handler
 
 increment:
     set y, 1
