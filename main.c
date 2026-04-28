@@ -74,7 +74,7 @@ static void encoder_init(encoder_t *enc, uint pin_idx) {
     memset(enc, 0, sizeof(*enc));
     gpio_init(pin_idx);
     gpio_set_dir(pin_idx, GPIO_IN);
-    gpio_pull_up(pin_idx);
+    gpio_disable_pulls(pin_idx);
 }
 
 // Drain the PIO RX FIFO and accumulate position.  Called every main-loop tick.

@@ -16,21 +16,11 @@ Useful for identifying unknown encoders: connect the encoder, spin the shaft, an
 
 ## Hardware
 
-| Signal | GPIO |
-|---|---|
-| OLED SDA | 0 |
-| OLED SCL | 1 |
-| Encoder A — Phase A | 2 |
-| Encoder A — Phase B | 3 |
-| Encoder A — Index (Z) | 4 |
-| Encoder B — Phase A | 5 |
-| Encoder B — Phase B | 6 |
-| Encoder B — Index (Z) | 7 |
-| WS2812 LED | 16 |
+![Pinout diagram](images/pinout.png)
 
-All encoder inputs use the internal pull-ups. The OLED is driven at 400 kHz I2C (address `0x3C`).
+Encoder inputs are driven by push-pull outputs — no pull-ups are needed on the RP2040 side. Button commons are connected to 3.3V (active-high), so internal pull-downs are used. The OLED is driven at 400 kHz I2C (address `0x3C`).
 
-The second encoder input (GPIO 5–7) accepts inverted wiring — swap A/B or use an open-collector output without a pull-up — allowing you to test both polarities at once without rewiring.
+The second encoder input (GPIO 5–7) accepts inverted wiring — swap A/B or invert the signal — allowing you to test both polarities at once without rewiring.
 
 ## Display layout
 

@@ -26,18 +26,18 @@
 #define OLED_I2C_FREQ 400000  // 400 kHz
 #define OLED_I2C_ADDR 0x3C    // SSD1306 I2C address
 
-// Buttons
-#define BUTTON_ESCAPE_PIN  8
-#define BUTTON_ENTER_PIN   9
-#define BUTTON_UP_PIN     10
-#define BUTTON_DOWN_PIN   11
+// Buttons — common connected to 3.3V (active-high), use internal pull-downs
+#define BUTTON_ESCAPE_PIN  29
+#define BUTTON_ENTER_PIN   28
+#define BUTTON_UP_PIN      27
+#define BUTTON_DOWN_PIN    26
 
-// Quadrature Encoder - Normal Input
+// Quadrature Encoder - Normal Input — push-pull outputs, no pull-ups needed
 #define ENCODER_NORMAL_PHASE_A_PIN 2
 #define ENCODER_NORMAL_PHASE_B_PIN 3
 #define ENCODER_NORMAL_INDEX_PIN   4
 
-// Quadrature Encoder - Inverted Input
+// Quadrature Encoder - Inverted Input — push-pull outputs, no pull-ups needed
 #define ENCODER_INVERTED_PHASE_A_PIN 5
 #define ENCODER_INVERTED_PHASE_B_PIN 6
 #define ENCODER_INVERTED_INDEX_PIN   7
