@@ -61,13 +61,13 @@ static void encoders_pio_init(void) {
     enc_pio            = pio1;
     enc_program_offset = pio_add_program(enc_pio, &quadrature_encoder_program);
 
+    // Normal and inverted encoders can share the same program
     enc_norm_sm = pio_claim_unused_sm(enc_pio, true);
-    quadrature_encoder_program_init(enc_pio, enc_norm_sm, enc_program_offset,
-                                    ENCODER_NORMAL_PHASE_A_PIN);
+    quadrature_encoder_program_init(enc_pio, enc_norm_sm, enc_program_offset, ENCODER_NORMAL_PHASE_A_PIN);
 
+    // Inverted encoder: swap A/B pins in the same program to decode in opposite direction.
     enc_inv_sm = pio_claim_unused_sm(enc_pio, true);
-    quadrature_encoder_program_init(enc_pio, enc_inv_sm, enc_program_offset,
-                                    ENCODER_INVERTED_PHASE_A_PIN);
+    quadrature_encoder_program_init(enc_pio, enc_inv_sm, enc_program_offset, ENCODER_INVERTED_PHASE_A_PIN);
 }
 
 static void encoder_init(encoder_t *enc, uint pin_idx) {
