@@ -1,6 +1,8 @@
 # Generated Cmake Pico project file
 
 cmake_minimum_required(VERSION 3.20)
+include(FetchContent)
+include(cmake/flash.cmake)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 17)
@@ -31,8 +33,6 @@ project(encoder-sniffer C CXX ASM)
 pico_sdk_init()
 
 # ---- u8g2 (display library) ---------------------------------------------------
-include(FetchContent)
-
 FetchContent_Declare(
     u8g2_fetch
     GIT_REPOSITORY https://github.com/olikraus/u8g2.git
@@ -58,8 +58,13 @@ pico_generate_pio_header(quadrature_encoder_pio ${CMAKE_CURRENT_LIST_DIR}/quadra
 # ---- Main executable ----------------------------------------------------------
 add_executable(encoder-sniffer main.c)
 
+# Set the name and version of the program (required for UF2 generation)
 pico_set_program_name(encoder-sniffer "encoder-sniffer")
 pico_set_program_version(encoder-sniffer "0.1")
+
+# Modify the below lines to enable/disable output over UART/USB
+pico_enable_stdio_uart(encoder-sniffer 0)
+pico_enable_stdio_usb(encoder-sniffer 1)
 
 target_include_directories(encoder-sniffer PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
@@ -76,7 +81,15 @@ target_link_libraries(encoder-sniffer
     quadrature_encoder_pio
 )
 
-pico_enable_stdio_uart(encoder-sniffer 0)
-pico_enable_stdio_usb(encoder-sniffer 1)
 
+# Create map/bin/hex/uf2 files
 pico_add_extra_outputs(encoder-sniffer)
+
+# Flash to device on every build invocation, even if nothing changed.
+# Override at configure time if auto-detection fails:
+#   cmake -DFLASH_PORT=COM3 ..
+#   cmake -DFLASH_UID=e6614c311b812b23 ..  (from the 'uid' serial command)
+set(FLASH_PORT "" CACHE STRING "Serial port for flashing (e.g. COM3). Auto-detected if empty.")
+set(FLASH_UID  "" CACHE STRING "RP2040 unique ID (hex) to target a specific device.")
+
+pico_add_flash_target(encoder-sniffer PORT ${FLASH_PORT} UID ${FLASH_UID})
