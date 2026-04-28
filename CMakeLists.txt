@@ -56,7 +56,7 @@ add_library(quadrature_encoder_pio INTERFACE)
 pico_generate_pio_header(quadrature_encoder_pio ${CMAKE_CURRENT_LIST_DIR}/quadrature_encoder.pio)
 
 # ---- Main executable ----------------------------------------------------------
-add_executable(encoder-sniffer main.c)
+add_executable(encoder-sniffer main.c encoder.c ws2812.c display.c)
 
 # Set the name and version of the program (required for UF2 generation)
 pico_set_program_name(encoder-sniffer "encoder-sniffer")
