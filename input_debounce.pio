@@ -1,0 +1,123 @@
+; Encoder sniffer for Raspberry Pi Pico
+; Copyright (C) 2026-...  Oleksandr Kolodkin <oleksandr.kolodkin@ukr.net>
+;
+; This program is free software: you can redistribute it and/or modify
+; it under the terms of the GNU General Public License as published by
+; the Free Software Foundation, either version 3 of the License, or
+; (at your option) any later version.
+;
+; This program is distributed in the hope that it will be useful,
+; but WITHOUT ANY WARRANTY; without even the implied warranty of
+; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+; GNU General Public License for more details.
+;
+; You should have received a copy of the GNU General Public License
+; along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+; Hardware-timed debounce for all UI input pins (4 buttons).
+;
+; Samples N consecutive GPIO pins, waits for the state to settle, then
+; pushes a stable snapshot to the RX FIFO whenever the stable state changes.
+;
+; Bit layout of each pushed word (IN shift direction = left):
+;   bit 0 = IN base pin      (BUTTON_DOWN,   active-high)
+;   bit 1 = IN base + 1      (BUTTON_UP,     active-high)
+;   bit 2 = IN base + 2      (BUTTON_ENTER,  active-high)
+;   bit 3 = IN base + 3      (BUTTON_ESCAPE, active-high)
+;   bits 31:4 = 0
+;
+; Settle window = 32 iterations x 17 cycles/iter = 544 PIO cycles.
+; Set clock divider so that 544 cycles spans the target settle time.
+;
+; Registers:
+;   X = last stable 4-bit pin state
+;   Y = scratch (settle countdown, then post-settle sample)
+
+.program input_debounce
+
+    ; Push initial stable state once so the CPU can seed prev_state.
+    mov isr, null
+    in  pins, 4
+    mov x, isr
+    push noblock
+
+loop:
+    mov isr, null
+    in  pins, 4
+    mov y, isr
+    jmp x!=y changed
+    jmp loop
+
+changed:
+    ; Spin for 544 PIO cycles (≈ settle_us µs at the configured clock rate).
+    ; Candidate value is discarded; only the post-settle reading matters.
+    set y, 31
+settle:
+    nop [15]              ; 16 cycles per iteration
+    jmp y-- settle        ; 32 x 17 = 544 cycles total
+
+    ; Re-read after settling.
+    mov isr, null
+    in  pins, 4
+    mov y, isr
+
+    jmp x!=y accept       ; still differs from last stable state → real transition
+    jmp loop              ; bounced back → ignore
+
+accept:
+    mov x, y
+    push noblock
+    jmp loop
+
+% c-sdk {
+#include "hardware/clocks.h"
+#include "hardware/pio.h"
+
+// PIO cycles in the settle loop: 32 iterations x 17 cycles each.
+#define INPUT_DEBOUNCE_SETTLE_CYCLES 544u
+
+typedef struct {
+    PIO  pio;
+    uint sm;
+    uint offset;
+} debounce_t;
+
+// Initialise the debounce state machine.
+//   pin_base  - first GPIO to monitor (must be the IN base)
+//   pin_count - number of consecutive GPIOs
+//   settle_us - target debounce window in microseconds
+// Returns the initial stable pin state read from the FIFO.
+static inline uint32_t debounce_setup(debounce_t *d, PIO pio,
+                                      uint pin_base, uint pin_count,
+                                      uint32_t settle_us) {
+    d->pio    = pio;
+    d->offset = pio_add_program(pio, &input_debounce_program);
+    d->sm     = pio_claim_unused_sm(pio, true);
+
+    pio_sm_config c = input_debounce_program_get_default_config(d->offset);
+
+    // Left-shift: bit-N of the pushed word = pin (base+N); no autopush.
+    // Join TX+RX FIFOs into a single 8-entry RX FIFO (TX unused on this SM).
+    sm_config_set_in_pins(&c, pin_base);
+    sm_config_set_in_shift(&c, false, false, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+
+    // Clock divider: map the 544-cycle settle loop to settle_us microseconds.
+    float div = ((float)settle_us * (float)clock_get_hz(clk_sys))
+                / ((float)INPUT_DEBOUNCE_SETTLE_CYCLES * 1e6f);
+    if (div < 1.0f) div = 1.0f;
+    sm_config_set_clkdiv(&c, div);
+
+    for (uint p = pin_base; p < pin_base + pin_count; p++) {
+        pio_gpio_init(pio, p);
+        gpio_pull_down(p);
+    }
+    pio_sm_set_consecutive_pindirs(pio, d->sm, pin_base, pin_count, false);
+    pio_sm_init(pio, d->sm, d->offset, &c);
+    pio_sm_set_enabled(pio, d->sm, true);
+
+    // The PIO pushes the initial state immediately; wait for that first entry.
+    while (pio_sm_is_rx_fifo_empty(d->pio, d->sm)) tight_loop_contents();
+    return pio_sm_get(d->pio, d->sm);
+}
+%}

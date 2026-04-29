@@ -15,6 +15,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "u8g2.h"
@@ -77,8 +79,7 @@ void display_init(void) {
     gpio_pull_up(OLED_SDA_PIN);
     gpio_pull_up(OLED_SCL_PIN);
 
-    u8g2_Setup_ssd1306_i2c_128x64_noname_f(
-        &u8g2, U8G2_R0, u8x8_pico_i2c_cb, u8x8_pico_delay_cb);
+    u8g2_Setup_ssd1306_i2c_128x64_noname_f(&u8g2, U8G2_R0, u8x8_pico_i2c_cb, u8x8_pico_delay_cb);
     u8g2_SetI2CAddress(&u8g2, (uint8_t)(OLED_I2C_ADDR << 1));
     u8g2_InitDisplay(&u8g2);
     u8g2_SetPowerSave(&u8g2, 0);

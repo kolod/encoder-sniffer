@@ -55,8 +55,19 @@ pico_generate_pio_header(ws2812_pio ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
 add_library(quadrature_encoder_pio INTERFACE)
 pico_generate_pio_header(quadrature_encoder_pio ${CMAKE_CURRENT_LIST_DIR}/quadrature_encoder.pio)
 
+# ---- Input debounce PIO -------------------------------------------------------
+add_library(input_debounce_pio INTERFACE)
+pico_generate_pio_header(input_debounce_pio ${CMAKE_CURRENT_LIST_DIR}/input_debounce.pio)
+
 # ---- Main executable ----------------------------------------------------------
-add_executable(encoder-sniffer main.c encoder.c ws2812.c display.c)
+add_executable(encoder-sniffer 
+    main.c 
+    encoder.c 
+    ws2812.c 
+    display.c
+    serial.c
+    input.c
+)
 
 # Set the name and version of the program (required for UF2 generation)
 pico_set_program_name(encoder-sniffer "encoder-sniffer")
@@ -79,6 +90,7 @@ target_link_libraries(encoder-sniffer
     u8g2lib
     ws2812_pio
     quadrature_encoder_pio
+    input_debounce_pio
 )
 
 
@@ -92,4 +104,4 @@ pico_add_extra_outputs(encoder-sniffer)
 set(FLASH_PORT "" CACHE STRING "Serial port for flashing (e.g. COM3). Auto-detected if empty.")
 set(FLASH_UID  "" CACHE STRING "RP2040 unique ID (hex) to target a specific device.")
 
-pico_add_flash_target(encoder-sniffer PORT ${FLASH_PORT} UID ${FLASH_UID})
+#pico_add_flash_target(encoder-sniffer PORT ${FLASH_PORT} UID ${FLASH_UID})

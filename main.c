@@ -14,12 +14,17 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include "board.h"
 #include "encoder.h"
 #include "ws2812.h"
 #include "display.h"
+#include "serial.h"
+#include "input.h"
 
 int main(void) {
     stdio_init_all();
@@ -27,6 +32,7 @@ int main(void) {
     ws2812_init();
     display_init();
     encoders_pio_init();
+    input_init();
 
     encoder_init(&enc_norm, ENCODER_NORMAL_INDEX_PIN);
     encoder_init(&enc_inv,  ENCODER_INVERTED_INDEX_PIN);
@@ -41,6 +47,22 @@ int main(void) {
     uint32_t last_display_ms = 0;
 
     while (true) {
+        serial_poll();
+        event_t ev = input_poll();
+        if (ev != EVENT_NONE) {
+            // For demonstration, just print the event. In a real application,
+            // you might want to handle it (e.g. reset position on ENTER).
+            const char *ev_str = "UNKNOWN";
+            switch (ev) {
+                case EVENT_ESCAPE: ev_str = "ESCAPE"; break;
+                case EVENT_ENTER:  ev_str = "ENTER";  break;
+                case EVENT_UP:     ev_str = "UP";     break;
+                case EVENT_DOWN:   ev_str = "DOWN";   break;
+                default: break;
+            }
+            printf("Event: %s\r\n", ev_str);
+        }
+
         uint32_t now = to_ms_since_boot(get_absolute_time());
 
         encoder_poll_pio(&enc_norm, enc_norm_sm);

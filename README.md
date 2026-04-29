@@ -24,7 +24,7 @@ The second encoder input (GPIO 5–7) accepts inverted wiring — swap A/B or in
 
 ## Display layout
 
-```
+```plain
 POS:<position>
 INV:<inverted position>  (or "INV: N/C" if no signal detected)
 PPR:<ppr>    Z:<index count>
